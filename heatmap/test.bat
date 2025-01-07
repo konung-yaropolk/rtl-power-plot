@@ -1,0 +1,1 @@
+python.exe --low 13 --high 1300 13-1750MHz-dump-fftw.bin 13-1750MHz-dump-fftw.png

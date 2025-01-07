@@ -1,11 +1,21 @@
 #! /usr/bin/env python
 
 from PIL import Image, ImageDraw, ImageFont
-import os, sys, gzip, math, argparse, colorsys, datetime
+import os
+import sys
+import gzip
+import math
+import argparse
+import colorsys
+import datetime
+import numpy as np
 from collections import defaultdict
 from itertools import *
 
-urlretrieve = lambda a, b: None
+
+def urlretrieve(a, b): return None
+
+
 try:
     import urllib.request
     urlretrieve = urllib.request.urlretrieve
@@ -37,43 +47,47 @@ except:
     print('Please download the Vera.ttf font and place it in the current directory.')
     sys.exit(1)
 
+
 def build_parser():
-    parser = argparse.ArgumentParser(description='Convert rtl_power CSV files into graphics.')
+    parser = argparse.ArgumentParser(
+        description='Convert rtl_power CSV files into graphics.')
     parser.add_argument('input_path', metavar='INPUT', type=str,
-        help='Input CSV file. (may be a .csv.gz)')
+                        help='Input CSV file. (may be a .csv.gz)')
     parser.add_argument('output_path', metavar='OUTPUT', type=str,
-        help='Output image. (various extensions supported)')
+                        help='Output image. (various extensions supported)')
     parser.add_argument('--offset', dest='offset_freq', default=None,
-        help='Shift the entire frequency range, for up/down converters.')
+                        help='Shift the entire frequency range, for up/down converters.')
     parser.add_argument('--ytick', dest='time_tick', default=None,
-        help='Place ticks along the Y axis every N seconds/minutes/hours/days.')
+                        help='Place ticks along the Y axis every N seconds/minutes/hours/days.')
     parser.add_argument('--db', dest='db_limit', nargs=2, default=None,
-        help='Minimum and maximum db values.')
+                        help='Minimum and maximum db values.')
     parser.add_argument('--compress', dest='compress', default=0,
-        help='Apply a gradual asymptotic time compression.  Values > 1 are the new target height, values < 1 are a scaling factor.')
+                        help='Apply a gradual asymptotic time compression.  Values > 1 are the new target height, values < 1 are a scaling factor.')
     slicegroup = parser.add_argument_group('Slicing',
-        'Efficiently render a portion of the data. (optional)  Frequencies can take G/M/k suffixes.  Timestamps look like "YYYY-MM-DD HH:MM:SS"  Durations take d/h/m/s suffixes.')
+                                           'Efficiently render a portion of the data. (optional)  Frequencies can take G/M/k suffixes.  Timestamps look like "YYYY-MM-DD HH:MM:SS"  Durations take d/h/m/s suffixes.')
     slicegroup.add_argument('--low', dest='low_freq', default=None,
-        help='Minimum frequency for a subrange.')
+                            help='Minimum frequency for a subrange.')
     slicegroup.add_argument('--high', dest='high_freq', default=None,
-        help='Maximum frequency for a subrange.')
+                            help='Maximum frequency for a subrange.')
     slicegroup.add_argument('--begin', dest='begin_time', default=None,
-        help='Timestamp to start at.')
+                            help='Timestamp to start at.')
     slicegroup.add_argument('--end', dest='end_time', default=None,
-        help='Timestamp to stop at.')
+                            help='Timestamp to stop at.')
     slicegroup.add_argument('--head', dest='head_time', default=None,
-        help='Duration to use, starting at the beginning.')
+                            help='Duration to use, starting at the beginning.')
     slicegroup.add_argument('--tail', dest='tail_time', default=None,
-        help='Duration to use, stopping at the end.')
+                            help='Duration to use, stopping at the end.')
     parser.add_argument('--palette', dest='palette', default='default',
-        help='Set Color Palette: default, extended, charolastra, twente')
+                        help='Set Color Palette: default, extended, charolastra, twente')
     return parser
+
 
 def frange(start, stop, step):
     i = 0
     while (i*step + start <= stop):
         yield i*step + start
         i += 1
+
 
 def min_filter(row):
     size = 3
@@ -94,6 +108,7 @@ def min_filter(row):
         result.append(min(near))
     return result
 
+
 def floatify(zs):
     # nix errors with -inf, windows errors with -1.#J
     zs2 = []
@@ -111,6 +126,7 @@ def floatify(zs):
         previous = z
     return zs2
 
+
 def freq_parse(s):
     suffix = 1
     if s.lower().endswith('k'):
@@ -122,6 +138,7 @@ def freq_parse(s):
     if suffix != 1:
         s = s[:-1]
     return float(s) * suffix
+
 
 def duration_parse(s):
     suffix = 1
@@ -137,20 +154,23 @@ def duration_parse(s):
         s = s[:-1]
     return float(s) * suffix
 
+
 def date_parse(s):
     if '-' not in s:
         return datetime.datetime.fromtimestamp(int(s))
     return datetime.datetime.strptime(s, '%Y-%m-%d %H:%M:%S')
+
 
 def palette_parse(s):
     palettes = {'default': default_palette,
                 'extended': extended_palette,
                 'charolastra': charolastra_palette,
                 'twente': twente_palette,
-               }
+                }
     if s not in palettes:
         print('WARNING: %s not a valid palette' % s)
     return palettes.get(s, default_palette)
+
 
 def gzip_wrap(path):
     "hides silly CRC errors"
@@ -165,13 +185,16 @@ def gzip_wrap(path):
         except IOError:
             running = False
 
+
 def time_compression(y, decay):
     return int(round((1/decay)*math.exp(y*decay) - 1/decay))
+
 
 def reparse(args, label, fn):
     if args.__getattribute__(label) is None:
         return
     args.__setattr__(label, fn(args.__getattribute__(label)))
+
 
 def prepare_args():
     # hack, http://stackoverflow.com/questions/9025204/
@@ -197,7 +220,7 @@ def prepare_args():
     args.compress = float(args.compress)
 
     if args.db_limit:
-        a,b = args.db_limit
+        a, b = args.db_limit
         args.db_limit = (float(a), float(b))
 
     if args.begin_time and args.tail_time:
@@ -211,20 +234,25 @@ def prepare_args():
         sys.exit(2)
     return args
 
-def open_raw_data(path):
-    raw_data = lambda: open(path)
+
+def open_raw_data(path, cols, rows):
+    raw_data = np.fromfile(path, dtype=np.float32,
+                           count=rows*cols)
+    raw_data = raw_data.reshape((rows, cols))
     if path.endswith('.gz'):
-        raw_data = lambda: gzip_wrap(path)
+        raw_data = gzip_wrap(path)
     return raw_data
+
 
 def slice_columns(columns, low_freq, high_freq):
     start_col = 0
-    stop_col  = len(columns)
-    if low_freq  is not None and low <= low_freq  <= high:
-        start_col = sum(f<low_freq   for f in columns)
-    if high_freq is not None and low <= high_freq <= high:
-        stop_col  = sum(f<=high_freq for f in columns)
+    stop_col = len(columns)
+    if low_freq:  # and low <= low_freq <= high:
+        start_col = sum(f < low_freq for f in columns)
+    if high_freq:  # and low <= high_freq <= high:
+        stop_col = sum(f <= high_freq for f in columns)
     return start_col, stop_col-1
+
 
 def summarize_pass(args):
     "pumps a bunch of data back into the args construct"
@@ -236,19 +264,24 @@ def summarize_pass(args):
     max_z = -100
     start, stop = None, None
 
-    for line in raw_data():
-        line = [s.strip() for s in line.strip().split(',')]
-        #line = [line[0], line[1]] + [float(s) for s in line[2:] if s]
-        line = [s for s in line if s]
+    for i, line in enumerate(raw_data):
+        # line = [s.strip() for s in line.strip().split(',')]
+        # # line = [line[0], line[1]] + [float(s) for s in line[2:] if s]
+        # line = [s for s in line if s]
 
-        low  = int(line[2]) + args.offset_freq
-        high = int(line[3]) + args.offset_freq
-        step = float(line[4])
-        t = line[0] + ' ' + line[1]
-        if '-' not in line[0]:
-            t = line[0]
+        # low = int(line[2]) + args.offset_freq
+        # high = int(line[3]) + args.offset_freq
+        # step = float(line[4])
+        # t = line[0] + ' ' + line[1]
+        # if '-' not in line[0]:
+        #     t = line[0]
 
-        if args.low_freq  is not None and high < args.low_freq:
+        low = 13  # LOW
+        high = 1300  # HIGHT
+        step = 1  # STEP
+        t = '353'
+
+        if args.low_freq is not None and high < args.low_freq:
             continue
         if args.high_freq is not None and args.high_freq < low:
             continue
@@ -258,20 +291,21 @@ def summarize_pass(args):
             break
         times.add(t)
         columns = list(frange(low, high, step))
-        start_col, stop_col = slice_columns(columns, args.low_freq, args.high_freq)
+        start_col, stop_col = slice_columns(
+            columns, args.low_freq, args.high_freq)
         f_key = (columns[start_col], columns[stop_col], step)
-        zs = line[6+start_col:6+stop_col+1]
-        if not zs:
+        zs = line[start_col:stop_col+1]
+        if not zs.any():
             continue
         if f_key not in f_cache:
             freq2 = list(frange(*f_key))[:len(zs)]
             freqs.update(freq2)
-            #freqs.add(f_key[1])  # high
-            #labels.add(f_key[0])  # low
+            # freqs.add(f_key[1])  # high
+            # labels.add(f_key[0])  # low
             f_cache.add(f_key)
 
         if not args.db_limit:
-            zs = floatify(zs)
+            # zs = floatify(zs)
             min_z = min(min_z, min(zs))
             max_z = max(max_z, max(zs))
 
@@ -294,7 +328,8 @@ def summarize_pass(args):
 
     if len(labels) == 1:
         delta = (max(freqs) - min(freqs)) / (len(freqs) / 500.0)
-        delta = round(delta / 10**int(math.log10(delta))) * 10**int(math.log10(delta))
+        delta = round(delta / 10**int(math.log10(delta))) * \
+            10**int(math.log10(delta))
         delta = int(delta)
         lower = int(math.ceil(min(freqs) / delta) * delta)
         labels = list(range(lower, int(max(freqs)), delta))
@@ -311,7 +346,8 @@ def summarize_pass(args):
             args.compress = -1 / args.compress
             pix_height = time_compression(height, args.compress)
 
-    print("x: %i, y: %i, z: (%f, %f)" % (len(freqs), pix_height, args.db_limit[0], args.db_limit[1]))
+    print("x: %i, y: %i, z: (%f, %f)" %
+          (len(freqs), pix_height, args.db_limit[0], args.db_limit[1]))
     args.freqs = freqs
     args.times = times
     args.labels = labels
@@ -319,16 +355,19 @@ def summarize_pass(args):
     args.start_stop = (start, stop)
     args.pixel_bandwidth = step
 
+
 def default_palette():
     return [(i, i, 50) for i in range(256)]
 
+
 def extended_palette():
-    p = [(0,0,50)]
+    p = [(0, 0, 50)]
     for i in range(1, 256):
         p.append((i, i-1, 50))
         p.append((i-1, i, 50))
         p.append((i, i, 50))
     return p
+
 
 def charolastra_palette():
     p = []
@@ -337,6 +376,7 @@ def charolastra_palette():
         c = colorsys.hsv_to_rgb(0.65-(g-0.08), 1, 0.2+g)
         p.append((int(c[0]*256), int(c[1]*256), int(c[2]*256)))
     return p
+
 
 def twente_palette():
     p = []
@@ -352,35 +392,44 @@ def twente_palette():
         p.append((255, 255, 255))
     return p
 
+
 def rgb_fn(palette, min_z, max_z):
     "palette is a list of tuples, returns a function of z"
     def rgb_inner(z):
-        tone = (z - min_z) / (max_z - min_z)
+        tone = (z - min_z) / (max_z - min_z) if z < max_z else 1    # КОСТЫЛЬ
         tone_scaled = int(tone * (len(palette)-1))
         return palette[tone_scaled]
     return rgb_inner
+
 
 def collate_row(x_size):
     # this is more fragile than the old code
     # sensitive to timestamps that are out of order
     old_t = None
     row = [0.0] * x_size
-    for line in raw_data():
-        line = [s.strip() for s in line.strip().split(',')]
-        #line = [line[0], line[1]] + [float(s) for s in line[2:] if s]
-        line = [s for s in line if s]
-        t = line[0] + ' ' + line[1]
-        if '-' not in line[0]:
-            t = line[0]
-        if t not in args.times:
-            continue  # happens with live files and time cropping
-        if old_t is None:
-            old_t = t
-        low = int(line[2]) + args.offset_freq
-        high = int(line[3]) + args.offset_freq
-        step = float(line[4])
+    for line in raw_data:
+        # line = [s.strip() for s in line.strip().split(',')]
+        # line = [line[0], line[1]] + [float(s) for s in line[2:] if s]
+        # line = [s for s in line if s]
+
+        low = 13  # LOW
+        high = 1300  # HIGHT
+        step = 1  # STEP
+        t = '351353'
+
+        # t = line[0] + ' ' + line[1]
+        # if '-' not in line[0]:
+        #     t = line[0]
+        # if t not in args.times:
+        #     continue  # happens with live files and time cropping
+        # if old_t is None:
+        #     old_t = t
+        # low = int(line[2]) + args.offset_freq
+        # high = int(line[3]) + args.offset_freq
+        # step = float(line[4])
         columns = list(frange(low, high, step))
-        start_col, stop_col = slice_columns(columns, args.low_freq, args.high_freq)
+        start_col, stop_col = slice_columns(
+            columns, args.low_freq, args.high_freq)
         if args.low_freq and columns[stop_col] < args.low_freq:
             continue
         if args.high_freq and columns[start_col] > args.high_freq:
@@ -390,7 +439,9 @@ def collate_row(x_size):
             start_freq = max(args.low_freq, start_freq)
         # sometimes fails?  skip or abort?
         x_start = args.freqs.index(start_freq)
-        zs = floatify(line[6+start_col:6+stop_col+1])
+
+        # floatify(line[start_col:stop_col+1])
+        zs = line[start_col:stop_col+1]
         if t != old_t:
             yield old_t, row
             row = [0.0] * x_size
@@ -401,6 +452,7 @@ def collate_row(x_size):
                 continue
             row[x] = zs[i]
     yield old_t, row
+
 
 def push_pixels(args):
     "returns PIL img"
@@ -413,11 +465,12 @@ def push_pixels(args):
     tally = 0
     old_y = None
     height = len(args.times)
+    print(height)
     for t, zs in collate_row(x_size):
-        y = args.times.index(t)
+        y = 0  # args.times.index(t)   # КОСТЫЛЬ
         if not args.compress:
             for x in range(len(zs)):
-                pix[x,y+tape_height+1] = rgb(zs[x])
+                pix[x, y+tape_height+1] = rgb(zs[x])
             continue
         # ugh
         y = args.pix_height - time_compression(height - y, args.compress)
@@ -425,7 +478,7 @@ def push_pixels(args):
             old_y = y
         if old_y != y:
             for x in range(len(average)):
-                pix[x,old_y+tape_height+1] = rgb(average[x]/tally)
+                pix[x, old_y+tape_height+1] = rgb(average[x]/tally)
             tally = 0
             average = [0.0] * width
         old_y = y
@@ -434,6 +487,7 @@ def push_pixels(args):
         tally += 1
     return img
 
+
 def closest_index(n, m_list, interpolate=False):
     "assumes sorted m_list, returns two points for interpolate"
     i = len(m_list) // 2
@@ -441,14 +495,14 @@ def closest_index(n, m_list, interpolate=False):
     while jump > 1:
         i_down = i - jump
         i_here = i
-        i_up =   i + jump
+        i_up = i + jump
         if i_down < 0:
             i_down = i
         if i_up >= len(m_list):
             i_up = i
         e_down = abs(m_list[i_down] - n)
         e_here = abs(m_list[i_here] - n)
-        e_up   = abs(m_list[i_up]   - n)
+        e_up = abs(m_list[i_up] - n)
         e_best = min([e_down, e_here, e_up])
         if e_down == e_best:
             i = i_down
@@ -465,6 +519,7 @@ def closest_index(n, m_list, interpolate=False):
         return i, i+1
     return i, i
 
+
 def word_aa(label, pt, fg_color, bg_color):
     f = ImageFont.truetype(vera_path, pt*3)
     s = f.getsize(label)
@@ -474,14 +529,16 @@ def word_aa(label, pt, fg_color, bg_color):
     w_draw.text((0, 0), label, font=f, fill=fg_color)
     return w_img.resize((s[0]//3, s[1]//3), Image.ANTIALIAS)
 
+
 def blend(percent, c1, c2):
     "c1 and c2 are RGB tuples"
     # probably isn't gamma correct
     r = c1[0] * percent + c2[0] * (1 - percent)
     g = c1[1] * percent + c2[1] * (1 - percent)
     b = c1[2] * percent + c2[2] * (1 - percent)
-    c3 = map(int, map(round, [r,g,b]))
+    c3 = map(int, map(round, [r, g, b]))
     return tuple(c3)
+
 
 def tape_lines(draw, freqs, interval, y1, y2, used=set()):
     min_f = min(freqs)
@@ -490,22 +547,24 @@ def tape_lines(draw, freqs, interval, y1, y2, used=set()):
     low_f = (min_f // interval) * interval
     high_f = (1 + max_f // interval) * interval
     hits = 0
-    blur = lambda p: blend(p, (255, 255, 0), (0, 0, 0))
+    def blur(p): return blend(p, (255, 255, 0), (0, 0, 0))
     for i in range(int(low_f), int(high_f), int(interval)):
         if not (min_f < i < max_f):
             continue
         hits += 1
         if i in used:
             continue
-        x1,x2 = closest_index(i, args.freqs, interpolate=True)
+        x1, x2 = closest_index(i, args.freqs, interpolate=True)
         if x1 == x2:
-            draw.line([x1,y1,x1,y2], fill='black')
+            draw.line([x1, y1, x1, y2], fill='black')
         else:
-            percent = (i - args.freqs[x1]) / float(args.freqs[x2] - args.freqs[x1])
-            draw.line([x1,y1,x1,y2], fill=blur(percent))
-            draw.line([x2,y1,x2,y2], fill=blur(1-percent))
+            percent = (i - args.freqs[x1]) / \
+                float(args.freqs[x2] - args.freqs[x1])
+            draw.line([x1, y1, x1, y2], fill=blur(percent))
+            draw.line([x2, y1, x2, y2], fill=blur(1-percent))
         used.add(i)
     return hits
+
 
 def tape_text(img, freqs, interval, y, used=set()):
     min_f = min(freqs)
@@ -526,7 +585,7 @@ def tape_text(img, freqs, interval, y, used=set()):
             if s.startswith('0'):
                 s = '%iM' % (i/1e6)
         else:
-            s = '%i' % (i%1000)
+            s = '%i' % (i % 1000)
             if s.startswith('0'):
                 s = '%ik' % ((i/1e3) % 1000)
             if s.startswith('0'):
@@ -535,16 +594,18 @@ def tape_text(img, freqs, interval, y, used=set()):
         img.paste(w, (x - w.size[0]//2, y))
         used.add(i)
 
+
 def shadow_text(draw, x, y, s, font, fg_color='white', bg_color='black'):
     draw.text((x+1, y+1), s, font=font, fill=bg_color)
     draw.text((x, y), s, font=font, fill=fg_color)
+
 
 def create_labels(args, img):
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default()
     pixel_bandwidth = args.pixel_bandwidth
 
-    draw.rectangle([0,0,img.size[0],tape_height], fill='yellow')
+    draw.rectangle([0, 0, img.size[0], tape_height], fill='yellow')
     min_freq = min(args.freqs)
     max_freq = max(args.freqs)
     delta = max_freq - min_freq
@@ -562,7 +623,7 @@ def create_labels(args, img):
             break
     label_base = 10**label_base
 
-    for scale,y in [(1,10), (5,15), (10,19), (50,22), (100,24), (500, 25)]:
+    for scale, y in [(1, 10), (5, 15), (10, 19), (50, 22), (100, 24), (500, 25)]:
         hits = tape_lines(draw, args.freqs, label_base/scale, y, tape_height)
         pixels_per_hit = width / hits
         if pixels_per_hit > 50:
@@ -583,35 +644,47 @@ def create_labels(args, img):
             label_format = "%Y-%m-%d"
         elif args.time_tick % 60 == 0:
             label_format = "%H:%M"
-        label_next = datetime.datetime(start.year, start.month, start.day, start.hour)
-        tick_delta = datetime.timedelta(seconds = args.time_tick)
+        label_next = datetime.datetime(
+            start.year, start.month, start.day, start.hour)
+        tick_delta = datetime.timedelta(seconds=args.time_tick)
         while label_next < start:
             label_next += tick_delta
         last_y = -100
         full_height = args.pix_height
-        for y,t in enumerate(args.times):
+        for y, t in enumerate(args.times):
             label_time = date_parse(t)
             if label_time < label_next:
                 continue
             if args.compress:
                 y = full_height - time_compression(height - y, args.compress)
             if y - last_y > 15:
-                shadow_text(draw, 2, y+tape_height, label_next.strftime(label_format), font)
+                shadow_text(draw, 2, y+tape_height,
+                            label_next.strftime(label_format), font)
                 last_y = y
             label_next += tick_delta
 
     margin = 2
     if args.time_tick:
         margin = 60
-    shadow_text(draw, margin, img.size[1] - 45, 'Duration: %i:%02i' % (hours, minutes), font)
-    shadow_text(draw, margin, img.size[1] - 35, 'Range: %.2fMHz - %.2fMHz' % (min_freq/1e6, (max_freq+pixel_bandwidth)/1e6), font)
-    shadow_text(draw, margin, img.size[1] - 25, 'Pixel: %.2fHz x %is' % (pixel_bandwidth, int(round(pixel_height))), font)
-    shadow_text(draw, margin,  img.size[1] - 15, 'Started: {0}'.format(start), font)
+    shadow_text(draw, margin, img.size[1] - 45,
+                'Duration: %i:%02i' % (hours, minutes), font)
+    shadow_text(draw, margin, img.size[1] - 35, 'Range: %.2fMHz - %.2fMHz' %
+                (min_freq/1e6, (max_freq+pixel_bandwidth)/1e6), font)
+    shadow_text(draw, margin, img.size[1] - 25, 'Pixel: %.2fHz x %is' %
+                (pixel_bandwidth, int(round(pixel_height))), font)
+    shadow_text(draw, margin,  img.size[1] -
+                15, 'Started: {0}'.format(start), font)
     # bin size
+
+
+rows = 90
+cols = 1520750
 
 print("loading")
 args = prepare_args()
-raw_data = open_raw_data(args.input_path)
+raw_data = open_raw_data(args.input_path, cols, rows)
+
+
 summarize_pass(args)
 
 print("drawing")
@@ -622,4 +695,3 @@ create_labels(args, img)
 
 print("saving")
 img.save(args.output_path)
-

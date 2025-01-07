@@ -6,6 +6,12 @@ __pycache__/
 # C extensions
 *.so
 
+# I/O files
+*.bin
+*.met
+*.csv
+*.png
+
 # Distribution / packaging
 .Python
 build/
